@@ -1,0 +1,144 @@
+model:
+  type: FlowMatchingModel
+  
+  # Flow Matching specific parameters
+  normalize_input: true      # Flag to normalize images to [-1, 1] range
+  in_channels: 3             # RGB images
+  flow_type: rectified_flow  # Options: rectified_flow, probability_flow
+  sigma: 0.1                 # Noise level for SDE
+  
+  unet_config:
+    sample_size: [256, 256]  # Full image size
+    in_channels: 3           # RGB channels
+    out_channels: 3          # Same as input for flow prediction
+    down_block_types: ['DownBlock2D', 'DownBlock2D', 'DownBlock2D', 'AttnDownBlock2D']
+    up_block_types: ['AttnUpBlock2D', 'UpBlock2D', 'UpBlock2D', 'UpBlock2D']
+    block_out_channels: [64, 128, 256, 256]
+    layers_per_block: 2
+    attention_head_dim: 8
+    norm_num_groups: 32
+    norm_eps: 0.00001
+  
+  num_inference_steps: 50    # Default sampling steps for inference
+
+validation:
+  num_vis_samples: 4         # Number of samples to visualize during validation
+
+# Optimizer configuration
+optimizer:
+  learning_rate: 0.0001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  use_ema: true
+  ema_decay: 0.999
+  ema_start: 1000
+
+# Data configuration
+data:
+  # Training dataloader configuration
+  train_dataloader:
+    dataset:
+      data_root: datasets/ffhq/ffhq_imgs/ffhq_256
+      type: SingleImageDataset
+      data_prefix:
+        gt: ''
+      pipeline:
+        - type: LoadImageFromFile
+          key: gt
+        - type: Crop
+          keys: [gt]
+          crop_size: [256, 256]
+          is_pad_zeros: true
+          random_crop: false
+        - type: Normalize
+          keys: [gt]
+          mean: [0.5, 0.5, 0.5]
+          std: [0.5, 0.5, 0.5]
+        - type: PackInputs
+    batch_size: 40
+    num_workers: 4
+    persistent_workers: true
+    sampler:
+      type: DefaultSampler
+      shuffle: true
+
+  # Validation dataloader configuration
+  val_dataloader:
+    dataset:
+      data_root: datasets/img_align_celeba/random_subset
+      type: SingleImageDataset
+      data_prefix:
+        gt: ''
+      pipeline:
+        - type: LoadImageFromFile
+          key: gt
+        - type: Crop
+          keys: [gt]
+          crop_size: [256, 256]
+          is_pad_zeros: true
+          random_crop: false
+        - type: Normalize
+          keys: [gt]
+          mean: [0.5, 0.5, 0.5]
+          std: [0.5, 0.5, 0.5]
+        - type: PackInputs
+    batch_size: 4
+    num_workers: 4
+    persistent_workers: true
+    sampler:
+      type: DefaultSampler
+      shuffle: false
+
+# Training configuration
+train:
+  max_steps: 300000
+  val_check_interval: 100
+
+# Logging configuration
+logging:
+  log_dir: work_dirs/flow_matching
+  experiment_name: flow_matching_model
+  log_every_n_steps: 100
+
+# Checkpoint configuration
+checkpoint:
+  save_best_metric: 'val/flow_mse'  # Metric to monitor
+  save_best_mode: 'min'             # 'min' for loss metrics
+  save_top_k: 3                     # Number of best checkpoints to keep
+  save_last: true                   # Whether to save the last checkpoint
+
+# Hooks configuration
+default_hooks:
+  checkpoint:
+    save_best: flow_mse
+    rule: less
+  timer:
+    type: IterTimerHook
+  logger:
+    type: LoggerHook
+    interval: 100
+  param_scheduler:
+    type: ParamSchedulerHook
+  sampler_seed:
+    type: DistSamplerSeedHook
+
+# Evaluation configuration
+val_evaluator:
+  metrics: 
+    - type: MSE
+    - type: PSNR
+    - type: SSIM
+
+# Visualization configuration
+visualization:
+  vis_backends:
+    - type: LocalVisBackend
+  visualizer:
+    type: ConcatImageVisualizer
+    vis_backends: ${visualization.vis_backends}
+    fn_key: gt_path
+    img_keys: [gt_img, pred_img]
+    bgr2rgb: true
+  custom_hooks:
+    - type: BasicVisualizationHook
+      interval: 1

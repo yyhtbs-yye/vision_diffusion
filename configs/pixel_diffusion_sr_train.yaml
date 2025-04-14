@@ -1,0 +1,156 @@
+model:
+  type: PixelDiffusionSRModel
+  
+  in_channels: 3            # RGB images instead of latent channels
+  
+  unet_config:
+    sample_size: [256, 256]  # Full image size instead of latent size
+    in_channels: 3           # RGB channels
+    out_channels: 3          # Same as input for prediction
+    down_block_types: ['DownBlock2D', 'DownBlock2D', 'DownBlock2D', 'AttnDownBlock2D']
+    up_block_types: ['AttnUpBlock2D', 'UpBlock2D', 'UpBlock2D', 'UpBlock2D']
+    block_out_channels: [128, 256, 512, 512]
+    layers_per_block: 2
+    attention_head_dim: 8
+    norm_num_groups: 32
+    norm_eps: 0.00001
+  
+  train_scheduler_config:
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: "linear"
+    steps_offset: 1
+    clip_sample: false
+    set_alpha_to_one: false
+    prediction_type: "epsilon"
+    num_train_timesteps: 1000
+  
+  test_scheduler_config:
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: "linear"
+    steps_offset: 1
+    clip_sample: false
+    set_alpha_to_one: false
+    prediction_type: "epsilon"
+    num_train_timesteps: 1000
+  
+  eta: 0.0                    # Parameter controlling noise level in sampling
+  num_inference_steps: 50     # Default sampling steps for inference
+
+validation:
+  num_vis_samples: 4          # Number of samples to visualize during validation
+
+# Optimizer configuration
+optimizer:
+  learning_rate: 0.0001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  use_ema: true
+  ema_decay: 0.999
+  ema_start: 1000
+  noise_offset_weight: 0.0    # Parameter for noise offset (disabled in your code)
+
+# Data configuration
+data:
+  # Training dataloader configuration
+  train_dataloader:
+    dataset:
+      type: NewImageDataset
+      paths:
+        gt: datasets/ffhq/ffhq_imgs/ffhq_256
+        lq: datasets/ffhq/ffhq_imgs/ffhq_32
+      data_prefix:
+        gt: ''
+        lq: ''
+      pipeline:
+        - type: LoadImageFromFile
+          keys: [gt, lq]
+        - type: Normalize
+          keys: [gt, lq]
+          mean: [0.5, 0.5, 0.5]
+          std: [0.5, 0.5, 0.5]
+    batch_size: 8
+    num_workers: 4
+    persistent_workers: true
+    sampler:
+      type: DefaultSampler
+      shuffle: true
+
+  # Validation dataloader configuration
+  val_dataloader:
+    dataset:
+      type: NewImageDataset
+      paths:
+        gt: datasets/celeba/subsets/celeba_256
+        lq: datasets/celeba/subsets/celeba_32
+      data_prefix:
+        gt: ''
+        lq: ''
+      pipeline:
+        - type: LoadImageFromFile
+          keys: [gt, lq]
+        - type: Normalize
+          keys: [gt, lq]
+          mean: [0.5, 0.5, 0.5]
+          std: [0.5, 0.5, 0.5]
+    batch_size: 8
+    num_workers: 4
+    persistent_workers: true
+    sampler:
+      type: DefaultSampler
+      shuffle: true
+
+# Training configuration
+train:
+  max_steps: 300000
+  val_check_interval: 100
+
+# Logging configuration
+logging:
+  log_dir: work_dirs/pixel_diffusion_sr
+  experiment_name: pixel_diffusion_sr
+  log_every_n_steps: 100
+
+# Checkpoint configuration
+checkpoint:
+  save_best_metric: 'val/img_mse'  # Changed from latent_mse to img_mse
+  save_best_mode: 'min'            # 'min' for loss metrics
+  save_top_k: 3                    # Number of best checkpoints to keep
+  save_last: true                  # Whether to save the last checkpoint
+
+# Hooks configuration
+default_hooks:
+  checkpoint:
+    save_best: img_mse             # Changed from latent_mse to img_mse
+    rule: less
+  timer:
+    type: IterTimerHook
+  logger:
+    type: LoggerHook
+    interval: 100
+  param_scheduler:
+    type: ParamSchedulerHook
+  sampler_seed:
+    type: DistSamplerSeedHook
+
+# Evaluation configuration
+val_evaluator:
+  metrics: 
+    - type: MSE
+    - type: PSNR
+    - type: SSIM
+
+# Visualization configuration, not implemented yet (now manually)
+visualization:
+  vis_backends:
+    - type: LocalVisBackend
+  visualizer:
+    type: ConcatImageVisualizer
+    vis_backends: ${visualization.vis_backends}
+    fn_key: gt_path
+    img_keys: [gt_img, pred_img]
+    bgr2rgb: true
+  custom_hooks:
+    - type: BasicVisualizationHook
+      interval: 1
