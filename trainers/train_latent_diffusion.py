@@ -6,12 +6,14 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from vision.data_modules.image_data_module import ImageDataModule
-from vision.models.latent_diffusion import LatentDiffusionModel
+from vision.models.generation.latent_diffusion import LatentDiffusionModel
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+torch.set_float32_matmul_precision('high')
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
 
 # Path to configuration file
-config_path = "configs/latent_diffusion_train.yaml"
+config_path = "configs/latent_diffusion_train_256.yaml"
 
 # Load YAML configuration
 with open(config_path, 'r') as f:
@@ -19,7 +21,6 @@ with open(config_path, 'r') as f:
 
 # Extract configurations
 model_config = config['model']
-optimizer_config = config['optimizer']
 validation_config = config['validation']
 train_config = config['train']
 data_config = config['data']
@@ -27,19 +28,22 @@ logging_config = config['logging']
 checkpoint_config = config['checkpoint']
 
 # Create a new model or load from checkpoint
-checkpoint_path = None
+checkpoint_path = "work_dirs/ldm_epoch11.ckpt"
 if checkpoint_path and os.path.exists(checkpoint_path):
     print(f"Loading model from checkpoint: {checkpoint_path}")
     model = LatentDiffusionModel.load_from_checkpoint(
         checkpoint_path, 
         model_config=model_config, 
-        optimizer_config=optimizer_config
+        train_config=train_config,
+        validation_config=validation_config,
     )
 else:
     print("Creating new model")
-    model = LatentDiffusionModel(model_config=model_config, 
-                                 optimizer_config=optimizer_config, 
-                                 validation_config=validation_config)
+    model = LatentDiffusionModel(
+        model_config=model_config,
+        train_config=train_config,
+        validation_config=validation_config
+    )
 
 # Create data module
 data_module = ImageDataModule(data_config)
@@ -55,7 +59,9 @@ callbacks = []
 
 # Checkpoint callback
 checkpoint_callback = ModelCheckpoint(
-    dirpath=os.path.join(logging_config['log_dir'], logging_config['experiment_name'], 'checkpoints'),
+    dirpath=os.path.join(logging_config['log_dir'], 
+                         logging_config['experiment_name'], 
+                         'checkpoints'),
     filename='{epoch:02d}-{' + checkpoint_config['save_best_metric'] + ':.4f}',
     monitor=checkpoint_config['save_best_metric'],
     mode=checkpoint_config['save_best_mode'],
@@ -70,9 +76,9 @@ callbacks.append(lr_monitor)
 
 # Initialize trainer
 trainer = Trainer(
-    max_steps=train_config['max_steps'],
+    max_epochs=train_config['max_epochs'],
     accelerator="auto",
-    devices=1 if torch.cuda.is_available() else None,
+    devices=4 if torch.cuda.is_available() else None,
     logger=logger,
     callbacks=callbacks,
     val_check_interval=train_config['val_check_interval'],

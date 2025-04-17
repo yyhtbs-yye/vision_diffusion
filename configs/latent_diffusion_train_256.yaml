@@ -2,11 +2,10 @@ model:
   type: LatentDiffusionModel
   
   vae_pretrained: "stabilityai/sd-vae-ft-mse"  # Example: A common pretrained VAE from Stable Diffusion
-  
+
+  latent_channels: 4        # Latent channels from VAE
   unet_config:
-    sample_size: [32, 32]  # Size of the latent space
-    in_channels: 4         # Latent channels from VAE
-    out_channels: 4        # Same as input for prediction
+    sample_size: [32, 32]     # Latent spatial size from VAE 64 / 8 = 8
     down_block_types: ['DownBlock2D', 'DownBlock2D', 'DownBlock2D', 'AttnDownBlock2D']
     up_block_types: ['AttnUpBlock2D', 'UpBlock2D', 'UpBlock2D', 'UpBlock2D']
     block_out_channels: [128, 256, 512, 512]
@@ -35,46 +34,41 @@ model:
     prediction_type: "epsilon"
     num_train_timesteps: 1000
   
+# Validation configuration
+validation:
+  num_vis_samples: 4          # Number of samples to visualize during validation
   eta: 0.0                    # Parameter controlling noise level in sampling
   num_inference_steps: 50     # Default sampling steps for inference
 
-validation:
-  num_vis_samples: 4          # Number of samples to visualize during validation
-
-# Optimizer configuration
-optimizer:
-  learning_rate: 0.00001
-  betas: [0.9, 0.999]
-  weight_decay: 0.0
-  use_ema: true
-  ema_decay: 0.999
-  ema_start: 1000
-  noise_offset_weight: 0.0    # Parameter for noise offset (disabled in your code)
+# Training configuration
+train:
+  max_epochs: 100
+  val_check_interval: 50
+  # Optimizer configuration
+  optimizer:
+    learning_rate: 0.00001
+    betas: [0.9, 0.999]
+    weight_decay: 0.0
+    use_ema: true
+    ema_decay: 0.999
+    ema_start: 1000
+    noise_offset_weight: 0.0    # Parameter for noise offset (disabled in your code)
 
 # Data configuration
 data:
   # Training dataloader configuration
   train_dataloader:
     dataset:
-      data_root: datasets/ffhq/ffhq_imgs/ffhq_256
-      type: SingleImageDataset
+      type: NewImageDataset
+      paths:
+        gt: datasets/ffhq/ffhq_imgs/ffhq_256
       data_prefix:
         gt: ''
       pipeline:
         - type: LoadImageFromFile
-          key: gt
-        - type: Crop
           keys: [gt]
-          crop_size: [256, 256]
-          is_pad_zeros: true
-          random_crop: false
-        - type: Normalize
-          keys: [gt]
-          mean: [0.5, 0.5, 0.5]
-          std: [0.5, 0.5, 0.5]
-        - type: PackInputs
-    batch_size: 16
-    num_workers: 4
+    batch_size: 64
+    num_workers: 32
     persistent_workers: true
     sampler:
       type: DefaultSampler
@@ -83,39 +77,25 @@ data:
   # Validation dataloader configuration
   val_dataloader:
     dataset:
-      data_root: datasets/img_align_celeba/random_subset
-      type: SingleImageDataset
+      type: NewImageDataset
+      paths:
+        gt: datasets/celeba/subsets/celeba_256
       data_prefix:
         gt: ''
       pipeline:
         - type: LoadImageFromFile
-          key: gt
-        - type: Crop
           keys: [gt]
-          crop_size: [256, 256]
-          is_pad_zeros: true
-          random_crop: false
-        - type: Normalize
-          keys: [gt]
-          mean: [0.5, 0.5, 0.5]
-          std: [0.5, 0.5, 0.5]
-        - type: PackInputs
-    batch_size: 16
-    num_workers: 4
+    batch_size: 64
+    num_workers: 32
     persistent_workers: true
     sampler:
       type: DefaultSampler
-      shuffle: false
-
-# Training configuration
-train:
-  max_steps: 300000
-  val_check_interval: 100
+      shuffle: true
 
 # Logging configuration
 logging:
-  log_dir: work_dirs/latent_diffusion
-  experiment_name: latent_diffusion_model
+  log_dir: work_dirs/latent_diffusion_model
+  experiment_name: latent_diffusion_model_256
   log_every_n_steps: 100
 
 # Checkpoint configuration
@@ -124,28 +104,6 @@ checkpoint:
   save_best_mode: 'min'               # 'min' for loss metrics
   save_top_k: 3                       # Number of best checkpoints to keep
   save_last: true                     # Whether to save the last checkpoint
-
-# Hooks configuration
-default_hooks:
-  checkpoint:
-    save_best: latent_mse
-    rule: less
-  timer:
-    type: IterTimerHook
-  logger:
-    type: LoggerHook
-    interval: 100
-  param_scheduler:
-    type: ParamSchedulerHook
-  sampler_seed:
-    type: DistSamplerSeedHook
-
-# Evaluation configuration
-val_evaluator:
-  metrics: 
-    - type: MSE
-    - type: PSNR
-    - type: SSIM
 
 # Visualization configuration
 visualization:

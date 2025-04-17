@@ -6,11 +6,13 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from vision.data_modules.image_data_module import ImageDataModule
-from vision.models.superresolution.pixel_diffusion_sr import PixelDiffusionSRModel  # Import the new DDPM model
-from vision.callbacks.memory_mgmt import MemoryMonitorCallback
+from vision.models.superresolution.sr3_pixel_diffusion import SR3PixelDiffusionModel  # Import the new DDPM model
 
-# Path to configuration file
-config_path = "configs/pixel_diffusion_sr_train.yaml"  # Updated config path
+torch.set_float32_matmul_precision('high')
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
+
+config_path = "configs/sr3_pixel_diffusion_train_128_256.yaml"  # Updated config path
 
 # Load YAML configuration
 with open(config_path, 'r') as f:
@@ -18,29 +20,28 @@ with open(config_path, 'r') as f:
 
 # Extract configurations
 model_config = config['model']
-optimizer_config = config['optimizer']
 validation_config = config['validation']
 train_config = config['train']
 data_config = config['data']
 logging_config = config['logging']
 checkpoint_config = config['checkpoint']
 
-# Create a new model or load from checkpoint
-checkpoint_path = "chpt_bkups/pixel_diffusion_sr.ckpt"  # Set this to your checkpoint path if needed
+# Create a new model or load from checkpoint, this is from the previous checkpoint
+checkpoint_path = "work_dirs/sr3_pixel_diffusion/sr3_pixel_diffusion_128_256/checkpoints/epoch=00-val/img_mse=0.0048.ckpt"  # Set this to your checkpoint path if needed
 
 if checkpoint_path and os.path.exists(checkpoint_path):
     print(f"Loading model from checkpoint: {checkpoint_path}")
-    model = PixelDiffusionSRModel.load_from_checkpoint(
+    model = SR3PixelDiffusionModel.load_from_checkpoint(
         checkpoint_path, 
         model_config=model_config,
-        optimizer_config=optimizer_config,
+        train_config=train_config,
         validation_config=validation_config
     )
 else:
     print("Creating new model")
-    model = PixelDiffusionSRModel(
+    model = SR3PixelDiffusionModel(
         model_config=model_config,
-        optimizer_config=optimizer_config,
+        train_config=train_config,
         validation_config=validation_config
     )
 
@@ -58,7 +59,9 @@ callbacks = []
 
 # Checkpoint callback
 checkpoint_callback = ModelCheckpoint(
-    dirpath=os.path.join(logging_config['log_dir'], logging_config['experiment_name'], 'checkpoints'),
+    dirpath=os.path.join(logging_config['log_dir'], 
+                         logging_config['experiment_name'], 
+                         'checkpoints'),
     filename='{epoch:02d}-{' + checkpoint_config['save_best_metric'] + ':.4f}',
     monitor=checkpoint_config['save_best_metric'],
     mode=checkpoint_config['save_best_mode'],
@@ -71,11 +74,9 @@ callbacks.append(checkpoint_callback)
 lr_monitor = LearningRateMonitor(logging_interval='step')
 callbacks.append(lr_monitor)
 
-callbacks.append(MemoryMonitorCallback())
-
 # Initialize trainer
 trainer = Trainer(
-    max_steps=train_config['max_steps'],
+    max_epochs=train_config['max_epochs'],
     accelerator="auto",
     devices=4 if torch.cuda.is_available() else None,
     logger=logger,

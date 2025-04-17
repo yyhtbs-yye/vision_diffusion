@@ -94,9 +94,9 @@ def process_images_parallel(image_files, input_dir, output_dir, scale_factor, nu
 
 def main():
     parser = argparse.ArgumentParser(description='Downsample images using bicubic interpolation with multiple processes.')
-    parser.add_argument('--input_dir', type=str, default="../datasets/celeba/subsets/celeba_1024", help='Directory containing images to downsample.')
-    parser.add_argument('--output_dir', type=str, default="../datasets/celeba/subsets/celeba_32", help='Directory to save downsampled images.')
-    parser.add_argument('--scale', type=float, default=0.03125, help='Scale factor for downsampling (0 < scale < 1).')
+    parser.add_argument('--input_dir', type=str, default="./datasets/celeba/fullsets/celeba_1024", help='Directory containing images to downsample.')
+    parser.add_argument('--output_dir', type=str, default="./datasets/celeba/fullsets/celeba_256", help='Directory to save downsampled images.')
+    parser.add_argument('--scale', type=float, default=0.25, help='Scale factor for downsampling (0 < scale < 1).')
     parser.add_argument('--extensions', type=str, default='.jpg,.jpeg,.png,.bmp,.tiff', 
                         help='Comma-separated list of image extensions to process.')
     parser.add_argument('--processes', type=int, default=None, 

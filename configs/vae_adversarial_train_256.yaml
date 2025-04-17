@@ -1,0 +1,123 @@
+model:
+  
+  type: VAEWithAdversarial
+  
+  in_channels: 3
+  
+  vae_config:  
+    down_block_types: [DownEncoderBlock2D, DownEncoderBlock2D, DownEncoderBlock2D, DownEncoderBlock2D]
+    up_block_types: [UpDecoderBlock2D, UpDecoderBlock2D, UpDecoderBlock2D, UpDecoderBlock2D]
+    block_out_channels: [64, 128, 256, 256]
+    latent_channels: 4
+    layers_per_block: 2
+    act_fn: silu
+    downsample_padding: 0
+    mid_block_add_attention: true
+    scaling_factor: 0.1828
+    force_upcast: true
+    sample_size: 256
+  
+  disc_config:
+  
+    down_block_types: [DownDiscBlock2D, DownDiscBlock2D, DownDiscBlock2D, DownDiscBlock2D]
+    block_out_channels: [64, 128, 256, 512]
+    layers_per_block: 2
+    add_attention: true
+    attention_head_dim: 8
+    norm_num_groups: 32
+    act_fn: silu
+    sample_size: 256
+
+# Validation configuration
+validation:
+  num_vis_samples: 4          # Number of samples to visualize during validation
+
+# Optimizer configuration
+train:
+  max_steps: 300000
+  val_check_interval: 100
+
+  vae_optimizer:
+    vae_steps: 1
+    learning_rate: 0.0001
+    betas: [0.5, 0.999]
+    weight_decay: 0.0
+    use_ema: true
+    ema_decay: 0.999
+    ema_start: 1000
+  disc_optimizer:
+    disc_steps: 1
+    learning_rate: 0.0002
+    betas: [0.5, 0.999]
+    weight_decay: 0.0
+    use_ema: false
+
+data:
+  # Training dataloader configuration
+  train_dataloader:
+    dataset:
+      type: NewImageDataset
+      paths:
+        gt: datasets/ffhq/ffhq_imgs/ffhq_256
+      data_prefix:
+        gt: ''
+      pipeline:
+        - type: LoadImageFromFile
+          keys: [gt]
+        # - type: Normalize
+        #   keys: [gt]
+        #   mean: [0.5, 0.5, 0.5]
+        #   std: [0.5, 0.5, 0.5]
+    batch_size: 16
+    num_workers: 8
+    persistent_workers: true
+    sampler:
+      type: DefaultSampler
+      shuffle: true
+
+  # Validation dataloader configuration
+  val_dataloader:
+    dataset:
+      type: NewImageDataset
+      paths:
+        gt: datasets/celeba/subsets/celeba_256
+      data_prefix:
+        gt: ''
+      pipeline:
+        - type: LoadImageFromFile
+          keys: [gt]
+        # - type: Normalize
+        #   keys: [gt]
+        #   mean: [0.5, 0.5, 0.5]
+        #   std: [0.5, 0.5, 0.5]
+    batch_size: 16
+    num_workers: 8
+    persistent_workers: true
+    sampler:
+      type: DefaultSampler
+      shuffle: true
+
+logging:
+  log_dir: work_dirs/vae
+  experiment_name: vae_adversarial
+  log_every_n_steps: 50
+
+checkpoint:
+  save_best_metric: 'vae_mse_loss'  # Metric to monitor for saving best models
+  save_best_mode: 'max'         # 'max' for metrics like accuracy/PSNR, 'min' for losses
+  save_top_k: 3                 # Number of best checkpoints to keep
+  save_last: true               # Whether to save the last checkpoint
+
+# Visualization configuration
+visualization:
+  vis_backends:
+    - type: LocalVisBackend
+  visualizer:
+    type: ConcatImageVisualizer
+    vis_backends: ${visualization.vis_backends}
+    fn_key: gt_path
+    img_keys: [gt_img, pred_img]
+    bgr2rgb: true
+  custom_hooks:
+    - type: BasicVisualizationHook
+      interval: 1

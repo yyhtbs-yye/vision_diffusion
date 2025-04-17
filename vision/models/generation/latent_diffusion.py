@@ -11,15 +11,12 @@ from vision.visualizers.basic_visualizer import visualize_comparisons
 from vision.dist_samplers.basic_sampler import inverse_add_noise, DefaultSampler
 
 class LatentDiffusionModel(pl.LightningModule):
-    """Latent Diffusion Model as a Lightning module.
-    
-    This model performs diffusion in the latent space without any conditioning.
-    Unlike text-conditioned models, this model learns to generate samples
-    directly from the learned data distribution without external guidance.
-    """
-    
-    def __init__(self, model_config, optimizer_config, validation_config):
+
+    def __init__(self, model_config, train_config, validation_config):
         super().__init__()
+        # !!! Disable automatic optimization
+        self.automatic_optimization = False
+
         self.save_hyperparameters(ignore=['model_config'])
         
         # Load Pre-train VAE
@@ -32,24 +29,25 @@ class LatentDiffusionModel(pl.LightningModule):
 
         # Create a Unet Model
         self.unet_config = model_config.get('unet_config', {})
+        self.latent_channels = model_config.get('latent_channels', 4)
+        self.unet_config['in_channels'] = model_config.get('latent_channels', 4)
+        self.unet_config['out_channels'] = model_config.get('latent_channels', 4)
         self.unet = UNet2DModel.from_config(self.unet_config)
 
         # Create Schedulers
         self.train_scheduler_config = model_config.get('train_scheduler_config', {})
-        self.test_scheduler_config = model_config.get('test_scheduler_config', {})
+        self.valid_scheduler_config = model_config.get('test_scheduler_config', {})
+        self.sample_scheduler_config = model_config.get('test_scheduler_config', {})
         self.train_scheduler = DDIMScheduler.from_config(self.train_scheduler_config)
-        self.test_scheduler = DDIMScheduler.from_config(self.test_scheduler_config)
+        self.valid_scheduler = DDIMScheduler.from_config(self.valid_scheduler_config)
+        self.sample_scheduler = DDIMScheduler.from_config(self.sample_scheduler_config)
 
-        # 
-        self.eta = model_config.get('eta', None)
-        self.num_inference_steps = model_config.get('num_inference_steps', None)
-        
-        # Validation Setting (move to validation in the future)
+        # Sampling parameters
+        self.eta = validation_config.get('eta', None)
+        self.num_inference_steps = validation_config.get('num_inference_steps', 50)
         self.num_vis_samples = validation_config.get('num_vis_samples', 4)
 
-        self.automatic_optimization = False
-
-        # Training params
+        optimizer_config = train_config.get('optimizer_config', {})
         self.learning_rate = optimizer_config.get('learning_rate', 1e-4)
         self.betas = optimizer_config.get('betas', [0.9, 0.999])
         self.weight_decay = optimizer_config.get('weight_decay', 0.0)
@@ -58,7 +56,7 @@ class LatentDiffusionModel(pl.LightningModule):
         self.ema_start = optimizer_config.get('ema_start', 1000)
         self.noise_offset_weight = optimizer_config.get('noise_offset_weight', 0.0)
         
-        self.test_sampler = DefaultSampler(self.unet, self.test_scheduler)
+        self.sampler = DefaultSampler(self.unet, self.sample_scheduler)
         
         # Create EMA model if requested
         if self.use_ema:
@@ -78,29 +76,20 @@ class LatentDiffusionModel(pl.LightningModule):
             ema_buffer.data.copy_(buffer.data)
     
     def forward(self, batch_size=None, latent_shape=None, num_inference_steps=50, return_dict=True):
-        """Generate new samples from random noise using latent diffusion.
-        
-        Args:
-            batch_size (int, optional): Number of samples to generate (if latent_shape not provided)
-            latent_shape (tuple, optional): Shape of latent noise (B, C, H, W); overrides batch_size
-            num_inference_steps (int): Number of denoising steps
-            return_dict (bool): Whether to return a dictionary with results
-        """
+
         if latent_shape is None:
             if batch_size is None:
                 raise ValueError("Must provide either batch_size or latent_shape")
-            # Default latent shape based on VAE downsampling (e.g., H/8, W/8)
-            latent_shape = (batch_size, 4, self.unet.config.sample_size[0], self.unet.config.sample_size[1])
+            
+            latent_shape = (batch_size, self.latent_channels, 
+                            self.unet.config.sample_size[0], self.unet.config.sample_size[1])
         
         # Generate random noise in latent space
         latents = torch.randn(latent_shape, device=self.device, dtype=self.unet.dtype)
         
         # Sample using the test sampler
-        generated_latents = self.test_sampler.sample(
-            latents,
-            num_inference_steps=num_inference_steps,
-            eta=self.eta,
-            generator=None
+        generated_latents = self.test_sampler.sample(latents, eta=self.eta,
+                                                     num_inference_steps=num_inference_steps,
         )
         
         # Decode to image space
@@ -121,16 +110,10 @@ class LatentDiffusionModel(pl.LightningModule):
         
         # Encode the images to latent space using frozen VAE
         with torch.no_grad():
-            latents = self.vae.encode(real_imgs).latent_dist.sample()
-            latents = latents * self.vae.config.scaling_factor
+            latents = self.encode_latents(real_imgs)
         
         # Add noise to latents
         noise = torch.randn_like(latents)
-        
-        # Apply noise offset for improved training if enabled (disabled)
-        # if self.noise_offset_weight > 0:
-        #     noise = noise + self.noise_offset_weight * torch.randn(
-        #         latents.shape[0], latents.shape[1], 1, 1, device=noise.device)
         
         # Sample random timesteps
         timesteps = torch.randint(
@@ -154,7 +137,13 @@ class LatentDiffusionModel(pl.LightningModule):
         
         # Calculate loss
         loss = F.mse_loss(noise_pred.float(), target.float())
-        
+
+        # Manually optimize
+        opt = self.optimizers()
+        opt.zero_grad()
+        self.manual_backward(loss)
+        opt.step()
+
         # Log metrics
         self.log("train_loss", loss, prog_bar=True)
         
@@ -165,103 +154,81 @@ class LatentDiffusionModel(pl.LightningModule):
         return loss
     
     def validation_step(self, batch, batch_idx):
-        '''
-        
-        '''
-        self.test_scheduler.set_timesteps(self.test_scheduler.config.num_train_timesteps)
+
+        self.valid_scheduler.set_timesteps(self.valid_scheduler.config.num_train_timesteps)
 
         real_imgs = batch['gt'] if isinstance(batch, dict) else batch
         batch_size = real_imgs.size(0)
         
         # Generate sample images using the current model
         with torch.no_grad():
+            # Encode the images to latent space using frozen VAE
+            latents = self.encode_latents(real_imgs)
 
-            # 1. Evaluate VAE reconstruction quality:
-            # - Encode real images to get latent distribution
-            # - Sample from this distribution to get latent representations
-            latent_dist = self.vae.encode(real_imgs).latent_dist
-            latents = latent_dist.sample()
-
-            # 2. Sample random timesteps from diffusion schedule
-            # This simulates different points in the diffusion process
+            # Sample random timesteps
             timesteps = torch.randint(
-                0, self.test_scheduler.config.num_train_timesteps, 
+                0, self.valid_scheduler.config.num_train_timesteps, 
                 (batch_size,), device=self.device
             ).long()
 
-            # 3. Generate random noise of the same shape as latents
-            # This represents the noise to be predicted by the UNet
+            # Add noise to latents according to noise schedule
             noise = torch.randn_like(latents)
 
-            # 4. Add noise to the latents according to the sampled timesteps
-            # This creates noisy latents that the UNet will try to denoise
-            noisy_latents = self.test_scheduler.add_noise(latents, noise, timesteps)
+            # Generate random noise of the same shape as latents
+            noisy_latents = self.valid_scheduler.add_noise(latents, noise, timesteps)
 
-            # 5. Predict noise using the UNet model
             # The UNet takes noisy latents and timesteps as input
             noise_pred = self.unet(noisy_latents, timesteps).sample
 
-            # 7. Calculate MSE between predicted noise and actual noise
-            # This is the primary metric for diffusion model training
+            # Calculate MSE between predicted noise and actual noise
             latent_mse = F.mse_loss(noise_pred, noise)
             self.log("val/latent_mse", latent_mse)  # Core diffusion model metric
 
-            # 8. Reconstruct the denoised latent by inverting the noise addition process
-            # This applies the inverse diffusion process using predicted noise
-            latent_denoised = inverse_add_noise(noisy_latents, noise_pred, timesteps, self.test_scheduler)
-
-            # 9. Decode the denoised latents to get reconstructed images
-            recon_imgs = self.vae.decode(latent_denoised).sample
-
-            # 10. Calculate pixel-space MSE between reconstructed and real images
-            # This provides an additional metric for image quality
-            img_mse = F.mse_loss(recon_imgs, real_imgs)
-            self.log("val/img_mse", img_mse)  # Core diffusion model metric
-
             # 11. For the first batch only, create and log visualization samples
             if batch_idx == 0:
-                # 12. Generate new samples from random noise using the test sampler
-                # This demonstrates the model's generative capabilities
-                noise_shape = list(latent_dist.mean.shape)
-                noise_shape[0] = self.num_vis_samples               # Set batch size to visualization sample count
-                latents = self.test_sampler.sample(noise_shape, 
-                                                   num_inference_steps=self.num_inference_steps, 
-                                                   eta=self.eta,    # Controls stochasticity in DDIM sampling
-                                                   )
+                
+                # This applies the inverse diffusion process using predicted noise
+                denoised_latent = inverse_add_noise(noisy_latents, noise_pred, timesteps, self.valid_scheduler)
 
-                # 13. Decode the generated latents to get sample images
-                samples = self.decode_latents(latents)
+                # Decode the denoised latents to get reconstructed images
+                recon_imgs = self.decode_latents(denoised_latent)
 
-                # 14. Create comparison visualizations between real and reconstructed images
                 # This helps assess reconstruction quality visually
                 cmp_dict = {
                     'real': real_imgs[:self.num_vis_samples],
                     'recon': recon_imgs[:self.num_vis_samples]
                 }
 
-                # 15. Log the comparison visualizations to the experiment logger
+                # Log the comparison visualizations to the experiment logger
                 visualize_comparisons(
                     logger=self.logger.experiment,
                     images_dict=cmp_dict,
                     keys=list(cmp_dict.keys()),
                     global_step=self.global_step,
-                    wnb=(0.5, 0.5),         # Weights and biases configuration
+                    wnb=(1.0, 0),         # Weights and biases configuration
                     prefix='val'            # Prefix for logging
                 )
 
-                # 16. Create and log visualization of purely generated samples
-                # This shows what the model can generate from scratch
+                noise_shape = [self.num_vis_samples, *latents.shape[1:]] 
+                noise = torch.randn(noise_shape, device=self.device, dtype=self.unet.dtype)
+
+                latents = self.sampler.sample(noise, num_inference_steps=self.num_inference_steps, eta=self.eta)
+
+                # Decode the generated latents to get sample images
+                generated_imgs = self.decode_latents(latents)
+
+                # Create and log visualization of purely generated samples
                 gen_dict = {
-                    'generated': samples[:4],
+                    'gen': generated_imgs,
                 }
 
-                # 17. Log the generated samples to the experiment logger
+                # Log the generated samples to the experiment logger
                 visualize_comparisons(
                     logger=self.logger.experiment,
                     images_dict=gen_dict,
                     keys=list(gen_dict.keys()),
                     global_step=self.global_step,
-                    wnb=(0.5, 0.5),
+                    wnb=(1.0, 0),         # Weights and biases configuration
                     prefix='val'
                 )                
         # 18. Return the primary validation metric (noise prediction error)
@@ -284,13 +251,24 @@ class LatentDiffusionModel(pl.LightningModule):
         image = self.vae.decode(latents).sample
             
         return image
+    def encode_latents(self, images):
+        """Encode images to latents using the VAE."""
+        # Encode images to latent space
+        latents = self.vae.encode(images).latent_dist.mean
+        latents = latents * self.vae.config.scaling_factor
+        
+        return latents
+    
     
     def on_save_checkpoint(self, checkpoint):
-        """Save EMA model state."""
+        checkpoint['unet'] = self.unet.state_dict()  # Save main model
         if self.use_ema:
-            checkpoint['unet_ema'] = self.unet_ema.state_dict()
-    
+            checkpoint['unet_ema'] = self.unet_ema.state_dict()  # Save EMA model
+     
     def on_load_checkpoint(self, checkpoint):
-        """Load EMA model state."""
+        # Load the main UNet model
+        if 'unet' in checkpoint:
+            self.unet.load_state_dict(checkpoint['unet'])
+        # Load the EMA model if it exists and is used
         if self.use_ema and 'unet_ema' in checkpoint:
             self.unet_ema.load_state_dict(checkpoint['unet_ema'])

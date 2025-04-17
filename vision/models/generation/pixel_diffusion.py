@@ -11,32 +11,33 @@ from vision.dist_samplers.basic_sampler import inverse_add_noise, DefaultSampler
 
 class PixelDiffusionModel(pl.LightningModule):
     
-    def __init__(self, model_config, optimizer_config, validation_config):
+    def __init__(self, model_config, train_config, validation_config):
         super().__init__()
+        # Disable automatic optimization
+        self.automatic_optimization = False
+
         self.save_hyperparameters(ignore=['model_config'])
         
-        # Create a Unet Model (adjusted to work with image dimensions)
+        # Create a UNet Model
         self.unet_config = model_config.get('unet_config', {})
-        # Ensure the UNet is configured for pixel space (right channels and dimensions)
         self.unet_config['in_channels'] = model_config.get('in_channels', 3)  # RGB images
         self.unet = UNet2DModel.from_config(self.unet_config)
 
         # Create Schedulers
         self.train_scheduler_config = model_config.get('train_scheduler_config', {})
-        self.test_scheduler_config = model_config.get('test_scheduler_config', {})
+        self.valid_scheduler_config = model_config.get('test_scheduler_config', {})
+        self.sample_scheduler_config = model_config.get('test_scheduler_config', {})
         self.train_scheduler = DDIMScheduler.from_config(self.train_scheduler_config)
-        self.test_scheduler = DDIMScheduler.from_config(self.test_scheduler_config)
+        self.valid_scheduler = DDIMScheduler.from_config(self.valid_scheduler_config)
+        self.sample_scheduler = DDIMScheduler.from_config(self.sample_scheduler_config)
 
         # Sampling parameters
-        self.eta = model_config.get('eta', None)
-        self.num_inference_steps = model_config.get('num_inference_steps', None)
-        
-        # Validation Setting
+        self.eta = validation_config.get('eta', None)
+        self.num_inference_steps = validation_config.get('num_inference_steps', 50)
         self.num_vis_samples = validation_config.get('num_vis_samples', 4)
-
-        self.automatic_optimization = False
-
+        
         # Training params
+        optimizer_config = train_config.get('optimizer', {})
         self.learning_rate = optimizer_config.get('learning_rate', 1e-4)
         self.betas = optimizer_config.get('betas', [0.9, 0.999])
         self.weight_decay = optimizer_config.get('weight_decay', 0.0)
@@ -45,9 +46,9 @@ class PixelDiffusionModel(pl.LightningModule):
         self.ema_start = optimizer_config.get('ema_start', 1000)
         self.noise_offset_weight = optimizer_config.get('noise_offset_weight', 0.0)
         
-        self.test_sampler = DefaultSampler(self.unet, self.test_scheduler)
+        self.sampler = DefaultSampler(self.unet, self.sample_scheduler)
         
-        # Create EMA model if requested
+        # EMA model setup
         if self.use_ema:
             self.unet_ema = deepcopy(self.unet)
             for param in self.unet_ema.parameters():
@@ -94,14 +95,10 @@ class PixelDiffusionModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         real_imgs = batch['gt'] if isinstance(batch, dict) else batch
-        
-        # Process the batch
         batch_size = real_imgs.shape[0]
         
-        # Add noise to images
-        noise = torch.randn_like(real_imgs)
-        
         # Sample random timesteps
+        noise = torch.randn_like(real_imgs)
         timesteps = torch.randint(
             0, self.train_scheduler.config.num_train_timesteps, 
             (batch_size,), device=self.device
@@ -133,7 +130,7 @@ class PixelDiffusionModel(pl.LightningModule):
         # Log metrics
         self.log("train_loss", loss, prog_bar=True)
         
-        # Update EMA model after each step
+        # Update EMA
         if self.use_ema and self.global_step >= self.ema_start:
             self._update_ema()
         
@@ -141,7 +138,7 @@ class PixelDiffusionModel(pl.LightningModule):
     
     def validation_step(self, batch, batch_idx):
 
-        self.test_scheduler.set_timesteps(self.test_scheduler.config.num_train_timesteps)
+        self.valid_scheduler.set_timesteps(self.valid_scheduler.config.num_train_timesteps)
 
         real_imgs = batch['gt'] if isinstance(batch, dict) else batch
         batch_size = real_imgs.size(0)
@@ -150,7 +147,7 @@ class PixelDiffusionModel(pl.LightningModule):
         with torch.no_grad():
             # Sample random timesteps from diffusion schedule
             timesteps = torch.randint(
-                0, self.test_scheduler.config.num_train_timesteps, 
+                0, self.valid_scheduler.config.num_train_timesteps, 
                 (batch_size,), device=self.device
             ).long()
 
@@ -158,7 +155,7 @@ class PixelDiffusionModel(pl.LightningModule):
             noise = torch.randn_like(real_imgs)
 
             # Add noise to the images according to the sampled timesteps
-            noisy_imgs = self.test_scheduler.add_noise(real_imgs, noise, timesteps)
+            noisy_imgs = self.valid_scheduler.add_noise(real_imgs, noise, timesteps)
 
             # Predict noise using the UNet model
             noise_pred = self.unet(noisy_imgs, timesteps).sample
@@ -171,7 +168,7 @@ class PixelDiffusionModel(pl.LightningModule):
             if batch_idx == 0:
 
                 # Reconstruct the denoised image by inverting the noise addition process
-                img_denoised = inverse_add_noise(noisy_imgs, noise_pred, timesteps, self.test_scheduler)
+                img_denoised = inverse_add_noise(noisy_imgs, noise_pred, timesteps, self.valid_scheduler)
 
                 # Create comparison visualizations between real and reconstructed images
                 cmp_dict = {
@@ -195,12 +192,10 @@ class PixelDiffusionModel(pl.LightningModule):
                 
                 noise = torch.randn(noise_shape, device=self.device, dtype=self.unet.dtype)
 
-                generated_imgs = self.test_sampler.sample(noise, num_inference_steps=self.num_inference_steps, eta=self.eta)
+                generated_imgs = self.sampler.sample(noise, num_inference_steps=self.num_inference_steps, eta=self.eta)
 
                 # Create and log visualization of purely generated samples
-                gen_dict = {
-                    'gen': generated_imgs,
-                }
+                gen_dict = {'gen': generated_imgs,}
 
                 # Log the generated samples to the experiment logger
                 visualize_comparisons(
@@ -226,11 +221,12 @@ class PixelDiffusionModel(pl.LightningModule):
         return optimizer
     
     def on_save_checkpoint(self, checkpoint):
-        """Save EMA model state."""
+        checkpoint['unet'] = self.unet.state_dict()
         if self.use_ema:
             checkpoint['unet_ema'] = self.unet_ema.state_dict()
-    
+     
     def on_load_checkpoint(self, checkpoint):
-        """Load EMA model state."""
+        if 'unet' in checkpoint:
+            self.unet.load_state_dict(checkpoint['unet'])
         if self.use_ema and 'unet_ema' in checkpoint:
             self.unet_ema.load_state_dict(checkpoint['unet_ema'])

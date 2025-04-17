@@ -4,11 +4,15 @@ import yaml
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
-
+from pytorch_lightning.strategies import DDPStrategy
 from vision.data_modules.image_data_module import ImageDataModule
-from vision.models.vae_adversarial import VAEWithAdversarial
+from vision.models.generation.vae_adversarial import VAEWithAdversarial
 
-config_path = "configs/vae_adversarial_train.yaml"
+torch.set_float32_matmul_precision('high')
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
+
+config_path = "configs/vae_adversarial_train_256.yaml"
 
 # Load YAML configuration
 with open(config_path, 'r') as f:
@@ -16,15 +20,30 @@ with open(config_path, 'r') as f:
 
 # Extract configurations
 model_config = config['model']
-optimizer_config = config['optimizer']
 train_config = config['train']
+validation_config = config['validation']
 data_config = config['data']
 logging_config = config['logging']
 checkpoint_config = config['checkpoint']
 
-checkpoint_path = "last.ckpt"
+checkpoint_path = None
 # Create model
-model = VAEWithAdversarial.load_from_checkpoint(checkpoint_path, model_config=model_config, optimizer_config=optimizer_config)
+if checkpoint_path and os.path.exists(checkpoint_path):
+    print(f"Loading model from checkpoint: {checkpoint_path}")
+    model = VAEWithAdversarial.load_from_checkpoint(
+        checkpoint_path, 
+        model_config=model_config,
+        train_config=train_config,
+        validation_config=validation_config
+    )
+else:
+    print("Creating new model")
+    model = VAEWithAdversarial(
+        model_config=model_config,
+        train_config=train_config,
+        validation_config=validation_config
+    )
+
 data_module = ImageDataModule(data_config)
 
 # Set up logger
@@ -53,9 +72,10 @@ callbacks.append(lr_monitor)
 
 # Initialize trainer
 trainer = Trainer(
+    strategy=DDPStrategy(find_unused_parameters=True),
     max_steps=train_config['max_steps'],
-    accelerator='auto',
-    devices=1 if torch.cuda.is_available() else None,
+    accelerator='gpu',
+    devices=4 if torch.cuda.is_available() else None,
     logger=logger,
     callbacks=callbacks,
     val_check_interval=train_config['val_check_interval'],
