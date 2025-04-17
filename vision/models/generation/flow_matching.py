@@ -76,7 +76,7 @@ class PixelFlowMatchingModel(pl.LightningModule):
         
         x = torch.randn(img_shape, device=self.device, dtype=self.unet.dtype)
         generated_images = self._integrate_ode(x, t_start=1.0, t_end=0.0, num_steps=num_inference_steps)
-        generated_images = generated_images * 0.5 + 0.5  # [-1, 1] to [0, 1]
+        generated_images = generated_images
         
         if return_dict:
             return {'samples': generated_images}
@@ -135,7 +135,7 @@ class PixelFlowMatchingModel(pl.LightningModule):
             # Sample random timesteps
             timesteps = torch.randint(
                 0, self.num_timesteps, 
-                (self.num_vis_samples,), device=self.device
+                (real_imgs.size(0),), device=self.device
             ).long()
 
             t = timesteps / (self.num_timesteps - 1)

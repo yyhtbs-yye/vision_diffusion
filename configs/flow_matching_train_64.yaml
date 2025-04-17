@@ -1,7 +1,8 @@
 model:
-  type: PixelDiffusionModel
+  type: FlowMatchingModel
   
-  in_channels: 3            # RGB channels
+  in_channels: 3           # RGB channels
+
   unet_config:
     sample_size: [64, 64]  # Full image size
     down_block_types: ['DownBlock2D', 'DownBlock2D', 'DownBlock2D', 'AttnDownBlock2D']
@@ -12,34 +13,11 @@ model:
     norm_num_groups: 32
     norm_eps: 0.00001
   
-  train_scheduler_config:
-    beta_start: 0.0001
-    beta_end: 0.02
-    beta_schedule: "linear"
-    steps_offset: 1
-    clip_sample: false
-    set_alpha_to_one: false
-    prediction_type: "epsilon"
-    num_train_timesteps: 1000
-  
-  test_scheduler_config:
-    beta_start: 0.0001
-    beta_end: 0.02
-    beta_schedule: "linear"
-    steps_offset: 1
-    clip_sample: false
-    set_alpha_to_one: false
-    prediction_type: "epsilon"
-    num_train_timesteps: 1000
-  
-
 # Validation configuration
 validation:
   num_vis_samples: 4          # Number of samples to visualize during validation
-  eta: 0.0                    # Parameter controlling noise level in sampling
-  num_inference_steps: 50     # Default sampling steps for inference
 
-# Training configuration
+# Optimizer configuration
 train:
   max_epochs: 100
   val_check_interval: 50
@@ -50,7 +28,6 @@ train:
     use_ema: true
     ema_decay: 0.999
     ema_start: 1000
-    noise_offset_weight: 0.0    # Parameter for noise offset (disabled in  code)
 
 # Data configuration
 data:
@@ -100,16 +77,16 @@ data:
 
 # Logging configuration
 logging:
-  log_dir: work_dirs/pixel_diffusion
-  experiment_name: pixel_diffusion_64
+  log_dir: work_dirs/flow_matching
+  experiment_name: flow_matching_model_64
   log_every_n_steps: 50
 
 # Checkpoint configuration
 checkpoint:
-  save_best_metric: 'val/img_mse'  # Changed from latent_mse to img_mse
-  save_best_mode: 'min'            # 'min' for loss metrics
-  save_top_k: 3                    # Number of best checkpoints to keep
-  save_last: true                  # Whether to save the last checkpoint
+  save_best_metric: 'val/img_mse'  # Metric to monitor
+  save_best_mode: 'min'             # 'min' for loss metrics
+  save_top_k: 3                     # Number of best checkpoints to keep
+  save_last: true                   # Whether to save the last checkpoint
 
 # Visualization configuration, not implemented yet (now manually)
 visualization:
