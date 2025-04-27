@@ -28,7 +28,7 @@ logging_config = config['logging']
 checkpoint_config = config['checkpoint']
 
 # Create a new model or load from checkpoint
-checkpoint_path = None
+checkpoint_path = 'work_dirs/flow_matching/flow_matching_model_64/checkpoints/epoch=94-val/img_mse=0.0286.ckpt'
 if checkpoint_path and os.path.exists(checkpoint_path):
     print(f"Loading model from checkpoint: {checkpoint_path}")
     model = PixelFlowMatchingModel.load_from_checkpoint(
